@@ -1,0 +1,6 @@
+输出结果/
+*.obj
+*.res
+*.pdb
+*.ilk
+__pycache__/
