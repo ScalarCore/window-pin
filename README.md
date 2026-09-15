@@ -10,7 +10,7 @@
 
 ## 使用
 
-从 [Releases](https://github.com/ScalarFX/window-pin/releases) 下载 `WindowPin.exe`，双击运行，无需安装。
+从 [Releases](https://github.com/ScalarCore/window-pin/releases) 下载 `WindowPin.exe`，双击运行，无需安装。
 
 - 选中一个窗口，按 **Win + Ctrl + T** 置顶，再按一次取消。
 - 置顶后显示蓝色细边框，随窗口移动和缩放，并匹配系统圆角设置；最大化时使用直角。最小化时隐藏，取消置顶或关闭窗口时移除。边框不拦截鼠标操作。
@@ -60,7 +60,7 @@ It is a standalone C++ application using Windows APIs. No PowerToys or .NET inst
 
 ### Download and use
 
-Download `WindowPin.exe` from [Releases](https://github.com/ScalarFX/window-pin/releases) and double-click it. No installer is needed. Windows x64 builds are currently provided.
+Download `WindowPin.exe` from [Releases](https://github.com/ScalarCore/window-pin/releases) and double-click it. No installer is needed. Windows x64 builds are currently provided.
 
 Select a window and press **Win + Ctrl + T** to pin it. Press the shortcut again to unpin it.
 
