@@ -1,5 +1,9 @@
 # Window Pin · 快捷键置顶
 
+[中文](#中文) · [English](#english)
+
+## 中文
+
 轻量 Windows 托盘工具：按 **Win + Ctrl + T**，切换当前窗口的置顶状态。
 
 使用 Windows API 编写的独立 C++ 程序，不依赖 PowerToys 或 .NET。
@@ -39,3 +43,53 @@ PowerToys 原始源码：https://github.com/microsoft/PowerToys/tree/main/src/mo
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。
+
+## English
+
+Window Pin is a lightweight Windows tray utility that toggles **always-on-top** for the active window with **Win + Ctrl + T**.
+
+It is a standalone C++ application using Windows APIs. No PowerToys or .NET installation is required. The current application interface is in Chinese.
+
+### Features
+
+- Pin or unpin the active window with one keyboard shortcut.
+- Show a blue border that follows the window's position, size, and system corner preference. Maximized windows use square corners.
+- Hide the border when minimized and remove it when the window closes or is unpinned. The border does not intercept mouse input.
+- Unpin all windows managed by the tool, toggle launch at sign-in, or exit from the tray menu.
+- Unpin managed windows on normal exit.
+
+### Download and use
+
+Download `WindowPin.exe` from [Releases](https://github.com/ScalarFX/window-pin/releases) and double-click it. No installer is needed. Windows x64 builds are currently provided.
+
+Select a window and press **Win + Ctrl + T** to pin it. Press the shortcut again to unpin it.
+
+Right-click the tray icon to access these commands:
+
+| Menu item | Meaning |
+| --- | --- |
+| 取消全部置顶 | Unpin all windows managed by Window Pin |
+| 开机启动 | Launch automatically when the current user signs in |
+| 退出 | Exit |
+
+Keep the executable in the same location after enabling startup. Disable startup before deleting the application. When upgrading from v1.0.0, exit the old version, replace the executable, and enable startup in the new tray menu to migrate the old registry entry to a Startup-folder shortcut.
+
+If another application uses the shortcut, Window Pin displays a message and exits. Managing elevated windows may require running Window Pin as administrator. Force-terminating the process skips normal exit cleanup.
+
+### Build from source
+
+Install Visual Studio 2022 C++ Build Tools and the Windows SDK. Run this command from **Developer PowerShell for VS 2022** in the project root:
+
+```powershell
+.\build.ps1
+```
+
+The executable is written to `输出结果/WindowPin.exe`. Source files are in `项目文件/`. The root-level `一键启动.bat` launches the built executable.
+
+The icon resource is included. Python and Pillow are only needed to regenerate the icon.
+
+### Credits and license
+
+The border implementation is adapted from Microsoft PowerToys' [WindowBorder.cpp and FrameDrawer.cpp](https://github.com/microsoft/PowerToys/tree/main/src/modules/alwaysontop/AlwaysOnTop), using Direct2D and window-position events.
+
+Window Pin is licensed under [MIT](LICENSE). See [PowerToys-LICENSE.txt](文档/PowerToys-LICENSE.txt) for the upstream copyright and license notice.
