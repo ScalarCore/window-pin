@@ -2,8 +2,11 @@
 #define _UNICODE
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <cwchar>
 #include <string>
+#include <vector>
+#include <dwmapi.h>
 
 constexpr wchar_t ClassName[] = L"FelixWindowPinWindow";
 constexpr wchar_t PinProperty[] = L"FelixWindowPin.Owned";
@@ -13,38 +16,57 @@ NOTIFYICONDATAW tray{};
 bool menuOpen = false;
 constexpr wchar_t RunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t RunName[] = L"FelixWindowPin";
+#include "Borders.h"
 
-std::wstring StartupCommand() {
-    wchar_t path[32768];
-    DWORD length = GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
-    if (!length || length >= ARRAYSIZE(path)) return {};
-    return L"\"" + std::wstring(path, length) + L"\"";
+std::wstring StartupLink() {
+    PWSTR folder = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Startup, KF_FLAG_CREATE, nullptr, &folder))) return {};
+    std::wstring path = std::wstring(folder) + L"\\WindowPin.lnk";
+    CoTaskMemFree(folder);
+    return path;
 }
 
 bool StartupEnabled() {
-    wchar_t value[32770]{};
-    DWORD bytes = sizeof(value);
-    return RegGetValueW(HKEY_CURRENT_USER, RunKey, RunName, RRF_RT_REG_SZ,
-                        nullptr, value, &bytes) == ERROR_SUCCESS && StartupCommand() == value;
+    auto path = StartupLink();
+    return !path.empty() && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
 bool SetStartup(bool enabled) {
-    HKEY key;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, RunKey, 0, nullptr, 0, KEY_SET_VALUE,
-                        nullptr, &key, nullptr) != ERROR_SUCCESS) return false;
-    LSTATUS result;
+    auto path = StartupLink();
+    if (path.empty()) return false;
+    bool success = false;
     if (enabled) {
-        auto command = StartupCommand();
-        result = command.empty() ? ERROR_INVALID_DATA : RegSetValueExW(key, RunName, 0, REG_SZ,
-            reinterpret_cast<const BYTE*>(command.c_str()), static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+        wchar_t exe[32768];
+        DWORD length = GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
+        if (!length || length >= ARRAYSIZE(exe)) return false;
+        IShellLinkW* link = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+        if (SUCCEEDED(hr)) {
+            hr = link->SetPath(exe);
+            std::wstring dir(exe, length);
+            dir.resize(dir.find_last_of(L"\\/"));
+            if (SUCCEEDED(hr)) hr = link->SetWorkingDirectory(dir.c_str());
+            if (SUCCEEDED(hr)) hr = link->SetDescription(L"快捷键置顶 — Win + Ctrl + T");
+            if (SUCCEEDED(hr)) hr = link->SetShowCmd(SW_SHOWNORMAL);
+            IPersistFile* file = nullptr;
+            if (SUCCEEDED(hr)) hr = link->QueryInterface(IID_PPV_ARGS(&file));
+            if (SUCCEEDED(hr)) { hr = file->Save(path.c_str(), TRUE); file->Release(); }
+            link->Release();
+        }
+        success = SUCCEEDED(hr);
     } else {
-        result = RegDeleteValueW(key, RunName);
-        if (result == ERROR_FILE_NOT_FOUND) result = ERROR_SUCCESS;
+        success = DeleteFileW(path.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND;
     }
-    RegCloseKey(key);
-    return result == ERROR_SUCCESS;
+    // Remove the previous Run registration after the replacement succeeds.
+    if (success) {
+        HKEY key;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, RunKey, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
+            RegDeleteValueW(key, RunName);
+            RegCloseKey(key);
+        }
+    }
+    return success;
 }
-
 bool Toggle(HWND target) {
     if (!target || target == GetDesktopWindow() || target == GetShellWindow()) return false;
     bool pinned = (GetWindowLongPtrW(target, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
@@ -55,6 +77,7 @@ bool Toggle(HWND target) {
         return false;
     }
     if (pinned) RemovePropW(target, PinProperty);
+    if (pinned) UpdateBorders(); else AddBorder(target);
     return true;
 }
 
@@ -62,15 +85,23 @@ BOOL CALLBACK Unpin(HWND window, LPARAM) {
     if (GetPropW(window, PinProperty)) {
         SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         RemovePropW(window, PinProperty);
+        UpdateBorders();
     }
     return TRUE;
 }
 
-void AddTray() { Shell_NotifyIconW(NIM_ADD, &tray); }
+void AddTray() {
+    if (Shell_NotifyIconW(NIM_ADD, &tray) || Shell_NotifyIconW(NIM_MODIFY, &tray))
+        KillTimer(tray.hWnd, 2);
+    else
+        SetTimer(tray.hWnd, 2, 2000, nullptr);
+}
 
 LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == taskbarCreated) { AddTray(); return 0; }
     switch (msg) {
+    case BorderEvent:
+        borderUpdatePending = false; UpdateBorders(); return 0;
     case WM_ACTIVATEAPP:
         if (!wp && menuOpen) EndMenu();
         break;
@@ -78,6 +109,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
         if (menuOpen) EndMenu();
         break;
     case WM_TIMER:
+        if (wp == 3) { UpdateBorders(); return 0; }
+        if (wp == 2) { AddTray(); return 0; }
         if (wp == 1 && menuOpen && GetForegroundWindow() != window) EndMenu();
         return 0;
     case WM_HOTKEY:
@@ -111,6 +144,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_DESTROY:
+        KillTimer(window, 3);
+        if (borderHook) { UnhookWinEvent(borderHook); borderHook = nullptr; }
+        for (const auto& border : borders) DestroyWindow(border.frame);
+        borders.clear();
         UnregisterHotKey(window, 1); EnumWindows(Unpin, 0);
         Shell_NotifyIconW(NIM_DELETE, &tray); PostQuitMessage(0); return 0;
     }
@@ -118,6 +155,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR args, int) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    struct ComScope { HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        ~ComScope() { if (SUCCEEDED(result)) CoUninitialize(); } } com;
     if (wcscmp(args, L"--enable-startup") == 0) return SetStartup(true) ? 0 : 7;
     if (wcscmp(args, L"--disable-startup") == 0) return SetStartup(false) ? 0 : 7;
     if (wcscmp(args, L"--exit") == 0) {
@@ -128,14 +168,55 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR args, int) {
     WNDCLASSW wc{}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance; wc.lpszClassName = ClassName;
     wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
     if (!RegisterClassW(&wc)) return 1;
+    WNDCLASSW bc{}; bc.lpfnWndProc = BorderProc; bc.hInstance = instance; bc.lpszClassName = BorderClass;
+    if (!RegisterClassW(&bc)) return 1;
     taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     HWND window = CreateWindowExW(WS_EX_TOOLWINDOW, ClassName, L"快捷键置顶", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, nullptr);
     if (!window) return 2;
+    mainWindow = window;
+    borderHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, BorderWinEvent, 0, 0, WINEVENT_OUTOFCONTEXT);
     if (wcscmp(args, L"--self-test") == 0) {
-        bool ok = Toggle(window) && (GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST);
-        ok = ok && Toggle(window) && !(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST);
-        ok = ok && Toggle(window); EnumWindows(Unpin, 0);
-        ok = ok && !(GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST) && !GetPropW(window, PinProperty);
+        HWND test = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"Window Pin test", WS_OVERLAPPEDWINDOW,
+            100, 100, 400, 300, nullptr, nullptr, instance, nullptr);
+        SetWindowPos(test, nullptr, 100, 100, 400, 300, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        bool ok = Toggle(test) && borders.size() == 1 && borders.front().render && IsWindowVisible(borders.front().frame);
+        for (int step = 0; step < 60; ++step) {
+            SetWindowPos(test, nullptr, 160 + step, 140 + step, 450 + step, 320 + step, SWP_NOZORDER | SWP_NOACTIVATE);
+            UpdateBorders();
+            RECT expected{}, actual{};
+            DwmGetWindowAttribute(test, DWMWA_EXTENDED_FRAME_BOUNDS, &expected, sizeof(expected));
+            if (!borders.empty()) {
+                InflateRect(&expected, borders.front().thickness, borders.front().thickness);
+                GetWindowRect(borders.front().frame, &actual);
+                ok = EqualRect(&expected, &actual) && borders.front().render && ok;
+            } else ok = false;
+        }
+        ShowWindow(test, SW_MINIMIZE); UpdateBorders();
+        ok = !borders.empty() && !IsWindowVisible(borders.front().frame) && ok;
+        ShowWindow(test, SW_SHOWNOACTIVATE); UpdateBorders();
+        ok = !borders.empty() && IsWindowVisible(borders.front().frame) && ok;
+        // Exercise the event hook, without calling UpdateBorders directly.
+        SetWindowPos(test, nullptr, 310, 270, 510, 390, SWP_NOZORDER | SWP_NOACTIVATE);
+        NotifyWinEvent(EVENT_OBJECT_LOCATIONCHANGE, test, OBJID_WINDOW, CHILDID_SELF);
+        KillTimer(window, 3);
+        DWORD deadline = GetTickCount() + 500;
+        RECT expected{}, actual{};
+        DwmGetWindowAttribute(test, DWMWA_EXTENDED_FRAME_BOUNDS, &expected, sizeof(expected));
+        if (!borders.empty()) InflateRect(&expected, borders.front().thickness, borders.front().thickness);
+        while (static_cast<LONG>(deadline - GetTickCount()) > 0) {
+            MSG event;
+            while (PeekMessageW(&event, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&event); DispatchMessageW(&event);
+            }
+            if (!borders.empty()) GetWindowRect(borders.front().frame, &actual);
+            if (EqualRect(&expected, &actual)) break;
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+        ok = EqualRect(&expected, &actual) && ok;
+        ok = Toggle(test) && borders.empty() && ok;
+        ok = Toggle(test) && ok;
+        DestroyWindow(test); UpdateBorders();
+        ok = borders.empty() && ok;
         DestroyWindow(window); return ok ? 0 : 3;
     }
     HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\FelixWindowPin");
@@ -155,5 +236,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR args, int) {
     if (result == -1) DestroyWindow(window);
     CloseHandle(mutex); return result == -1 ? 6 : 0;
 }
+
+
+
+
 
 
